@@ -14,7 +14,7 @@
 # limitations under the License.
 #
 import flask
-from flask import Flask, request
+from flask import Flask, request, make_response, jsonify, redirect
 from flask_sockets import Sockets
 import gevent
 from gevent import queue
@@ -25,6 +25,27 @@ import os
 app = Flask(__name__)
 sockets = Sockets(app)
 app.debug = True
+clients = list()
+
+# source: https://github.com/abramhindle/WebSocketsExamples/blob/master/chat.py
+def send_all(msg):
+    for client in clients:
+        client.put( msg )
+
+# source: https://github.com/abramhindle/WebSocketsExamples/blob/master/chat.py
+def send_all_json(obj):
+    send_all( json.dumps(obj) )
+
+# source: https://github.com/abramhindle/WebSocketsExamples/blob/master/chat.py
+class Client:
+    def __init__(self):
+        self.queue = queue.Queue()
+
+    def put(self, v):
+        self.queue.put_nowait(v)
+
+    def get(self):
+        return self.queue.get()
 
 class World:
     def __init__(self):
@@ -62,26 +83,52 @@ class World:
 myWorld = World()        
 
 def set_listener( entity, data ):
-    ''' do something with the update ! '''
+    send_all_json({entity: data})
 
 myWorld.add_set_listener( set_listener )
         
 @app.route('/')
 def hello():
     '''Return something coherent here.. perhaps redirect to /static/index.html '''
-    return None
+    return redirect('/static/index.html', 302)
 
-def read_ws(ws,client):
+def read_ws(socket,client):
     '''A greenlet function that reads from the websocket and updates the world'''
     # XXX: TODO IMPLEMENT ME
-    return None
+    # source: https://github.com/abramhindle/WebSocketsExamples/blob/master/chat.py
+    try:
+        while True:
+            msg = socket.receive()
+            print("WS RECV: %s" % msg)
+            if (msg is not None):
+                packet = json.loads(msg)
+                for entity, data in packet.items():
+                    myWorld.set(entity, data)
+            else:
+                break
+    except:
+        '''Done'''
 
 @sockets.route('/subscribe')
 def subscribe_socket(ws):
     '''Fufill the websocket URL of /subscribe, every update notify the
        websocket and read updates from the websocket '''
     # XXX: TODO IMPLEMENT ME
-    return None
+    # source: https://github.com/abramhindle/WebSocketsExamples/blob/master/chat.py
+    client = Client()
+    clients.append(client)
+    g = gevent.spawn( read_ws, ws, client )
+    try:
+        ws.send(json.dumps(myWorld.world()))
+        while True:
+            # block here
+            msg = client.get()
+            ws.send(msg)
+    except Exception as e:# WebSocketError as e:
+        print("WS Error %s" % e)
+    finally:
+        clients.remove(client)
+        gevent.kill(g)
 
 
 # I give this to you, this is how you get the raw body/data portion of a post in flask
@@ -99,23 +146,25 @@ def flask_post_json():
 @app.route("/entity/<entity>", methods=['POST','PUT'])
 def update(entity):
     '''update the entities via this interface'''
-    return None
+    newData = flask_post_json()
+    myWorld.set(entity, newData)
+    return make_response(jsonify(newData), 200)
 
 @app.route("/world", methods=['POST','GET'])    
 def world():
     '''you should probably return the world here'''
-    return None
+    return make_response(jsonify(myWorld.world()), 200)
 
 @app.route("/entity/<entity>")    
 def get_entity(entity):
     '''This is the GET version of the entity interface, return a representation of the entity'''
-    return None
+    return make_response(jsonify(myWorld.get(entity)), 200)
 
 
 @app.route("/clear", methods=['POST','GET'])
 def clear():
-    '''Clear the world out!'''
-    return None
+    myWorld.clear()
+    return make_response(jsonify(myWorld.world()), 200)
 
 
 
